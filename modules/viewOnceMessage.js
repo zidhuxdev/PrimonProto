@@ -2,6 +2,8 @@ const fs = require('fs');
 
 addCommand({ pattern: "^show$", access: "all", desc: "_It allows you to view the view once messages._" }, async (msg, match, sock, rawMessage) => {
     const grupId = msg.key.remoteJid;
+
+    // Reply-to check
     if (!msg.quotedMessage) {
         if (msg.key.fromMe) {
             return await sock.sendMessage(grupId, { text: "_Please reply to a view once message!_", edit: msg.key });
@@ -10,46 +12,67 @@ addCommand({ pattern: "^show$", access: "all", desc: "_It allows you to view the
         }
     }
 
-    if (msg.quotedMessage?.viewOnceMessage || msg.quotedMessage?.viewOnceMessageV2 || msg.quotedMessage?.viewOnceMessageV2Extension || msg.quotedMessage?.imageMessage) {
-        var viewOnceMessage = msg.quotedMessage?.viewOnceMessage?.message?.imageMessage || msg.quotedMessage?.viewOnceMessage?.message?.videoMessage || msg.quotedMessage?.viewOnceMessageV2?.message?.imageMessage || msg.quotedMessage?.viewOnceMessageV2?.message?.videoMessage || msg.quotedMessage?.viewOnceMessageV2Extension?.message || msg.quotedMessage?.viewOnceMessageV2Extension?.message?.imageMessage || msg.quotedMessage?.viewOnceMessageV2Extension?.message?.videoMessage || msg.quotedMessage?.imageMessage || msg.quotedMessage?.videoMessage;
-        if ((msg.quotedMessage?.imageMessage && msg.quotedMessage?.imageMessage?.viewOnce !== true) || (msg.quotedMessage?.videoMessage && msg.quotedMessage?.videoMessage?.viewOnce !== true)) {
-            if (msg.key.fromMe) {
-                return await sock.sendMessage(grupId, { text: "_Please reply to a view once message!_", edit: msg.key });
-            } else {
-                return await sock.sendMessage(grupId, { text: "_Please reply to a view once message!_"}, { quoted: rawMessage.messages[0] });
-            }
-        }
-        const mediaPath = `./viewOnceMessage` + Math.floor(Math.random() * 1000) + (viewOnceMessage?.imageMessage ? ".png" : ".mp4");
-        var configs = {
-            _0: viewOnceMessage,
-            _1: msg.quotedMessage?.imageMessage ? "image" : "video",
-            _2: mediaPath
-        };
+    // Check if the quoted message is any kind of view-once structure
+    const hasViewOnce = msg.quotedMessage?.viewOnceMessage 
+        || msg.quotedMessage?.viewOnceMessageV2 
+        || msg.quotedMessage?.viewOnceMessageV2Extension;
 
-        const downloadMessage = msg.key.fromMe 
-            ? { text: "_⏳ Downloading.._", edit: msg.key } 
-            : { text: "_⏳ Downloading.._", quoted: rawMessage.messages[0] };
-
-        const sentMessage = await sock.sendMessage(grupId, downloadMessage);
-
-        await global.downloadMedia(configs._0, configs._1, configs._2);
-
-        const deleteMessage = { delete: msg.key.fromMe ? msg.key : sentMessage.key };
-        const mediaMessage = { [configs._1]: { url: configs._2 }, caption: `_⏳ Downloaded!_` };
-        const sendMediaMessage = msg.key.fromMe 
-            ? mediaMessage 
-            : { ...mediaMessage, quoted: rawMessage.messages[0] };
-
-        await sock.sendMessage(grupId, deleteMessage);
-        await sock.sendMessage(grupId, sendMediaMessage);
-
-        if (fs.existsSync(configs._2)) fs.unlinkSync(configs._2);
-        return;
-    } else {
+    if (!hasViewOnce) {
         if (msg.key.fromMe) {
             return await sock.sendMessage(grupId, { text: "_Please reply to a view once message!_", edit: msg.key });
         } else {
             return await sock.sendMessage(grupId, { text: "_Please reply to a view once message!_"}, { quoted: rawMessage.messages[0] });
         }
     }
-})
+
+    // Extract the actual media object from the nested structure
+    const media = msg.quotedMessage?.viewOnceMessage?.message?.imageMessage
+        || msg.quotedMessage?.viewOnceMessage?.message?.videoMessage
+        || msg.quotedMessage?.viewOnceMessageV2?.message?.imageMessage
+        || msg.quotedMessage?.viewOnceMessageV2?.message?.videoMessage
+        || msg.quotedMessage?.viewOnceMessageV2Extension?.message?.imageMessage
+        || msg.quotedMessage?.viewOnceMessageV2Extension?.message?.videoMessage;
+
+    if (!media) {
+        if (msg.key.fromMe) {
+            return await sock.sendMessage(grupId, { text: "_Could not extract media from this message!_", edit: msg.key });
+        } else {
+            return await sock.sendMessage(grupId, { text: "_Could not extract media from this message!_"}, { quoted: rawMessage.messages[0] });
+        }
+    }
+
+    // Determine media type from the extracted object
+    const isImage = media.mimetype?.startsWith("image") || !!media.imageMessage;
+    const mediaType = isImage ? "image" : "video";
+    const extension = isImage ? ".png" : ".mp4";
+
+    const mediaPath = `./viewOnceMessage${Math.floor(Math.random() * 1000)}${extension}`;
+
+    // Download indicator
+    const downloadMessage = msg.key.fromMe 
+        ? { text: "_⏳ Downloading.._", edit: msg.key } 
+        : { text: "_⏳ Downloading.._", quoted: rawMessage.messages[0] };
+
+    const sentMessage = await sock.sendMessage(grupId, downloadMessage);
+
+    // Download the media
+    await global.downloadMedia(media, mediaType, mediaPath);
+
+    // Delete the "downloading" status and send the actual media
+    const deleteMessage = { delete: msg.key.fromMe ? msg.key : sentMessage.key };
+    await sock.sendMessage(grupId, deleteMessage);
+
+    const sendMediaMessage = {
+        [mediaType]: { url: mediaPath },
+        caption: "_✅ Downloaded!_"
+    };
+
+    const finalMessage = msg.key.fromMe 
+        ? sendMediaMessage 
+        : { ...sendMediaMessage, quoted: rawMessage.messages[0] };
+
+    await sock.sendMessage(grupId, finalMessage);
+
+    // Cleanup
+    if (fs.existsSync(mediaPath)) fs.unlinkSync(mediaPath);
+});
